@@ -1,0 +1,6 @@
+{
+  "name": "Horix — Gestão de Horímetros e Manutenção",
+  "description": "Sistema Horix para recebimento de planilhas, coleta de horímetros, faturamento, consulta de equipamentos e controle de manutenção preventiva.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
