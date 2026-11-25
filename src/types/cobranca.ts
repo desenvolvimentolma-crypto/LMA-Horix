@@ -26,6 +26,11 @@ export interface FichaAttachment {
   enviadoEm: string;
 }
 
+export interface PatrimonioItem {
+  patrimonio: string;
+  horimetro: string;
+}
+
 export interface CobrancaRecord {
   id: string;
   status: StatusHorimetro;
@@ -38,6 +43,7 @@ export interface CobrancaRecord {
   empresa: string;
   patrimonio: string;
   horimetro: string;
+  patrimoniosItens?: PatrimonioItem[];
   dataColeta: string;
   nomeContato: string;
   telefoneContato: string;
@@ -86,6 +92,7 @@ export interface ParsedImportRow {
   empresa: string;
   patrimonio: string;
   horimetro: string;
+  patrimoniosItens?: PatrimonioItem[];
   dataColeta: string;
   nomeContato: string;
   telefoneContato: string;

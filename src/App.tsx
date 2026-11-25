@@ -25,7 +25,7 @@ import type {
   UserRole,
   WorkspaceTab,
 } from './types/cobranca';
-import { buildClientPlatforms } from './utils/horimetro';
+import { buildClientPlatforms, getRecordEquipmentItems } from './utils/horimetro';
 import { parseJsonResponse } from './utils/http';
 import { AuthGate } from './components/AuthGate';
 import { VisaoGeralView } from './components/VisaoGeralView';
@@ -176,7 +176,7 @@ export default function App() {
     }
   }, [authToken, currentUser, authFetch, applyState]);
 
-  // Authenticated SSE stream via fetch ReadableStream (with silent polling fallback on serverless/Netlify)
+  // Fast automatic real-time sync (SSE when stateful, 2.5s visibility-aware polling on serverless/Netlify)
   useEffect(() => {
     if (!authToken || !currentUser) return;
 
@@ -184,20 +184,41 @@ export default function App() {
 
     const controller = new AbortController();
     let pollTimer: number | undefined;
+    let pollInFlight = false;
+
+    const silentSync = async () => {
+      if (controller.signal.aborted || pollInFlight) return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        return;
+      }
+      pollInFlight = true;
+      try {
+        const res = await authFetch('/api/state');
+        if (!res.ok) return;
+        const data = await parseJsonResponse<ServerState>(res);
+        applyState(data);
+      } catch {
+        // Ignore background poll failures
+      } finally {
+        pollInFlight = false;
+      }
+    };
 
     const startPolling = () => {
       if (pollTimer !== undefined || controller.signal.aborted) return;
-      pollTimer = window.setInterval(async () => {
-        try {
-          const res = await authFetch('/api/state');
-          if (!res.ok) return;
-          const data = await parseJsonResponse<ServerState>(res);
-          applyState(data);
-        } catch {
-          // Ignore background poll failures
-        }
-      }, 20000);
+      pollTimer = window.setInterval(() => {
+        void silentSync();
+      }, 2500);
     };
+
+    const handleResumeSync = () => {
+      if (document.visibilityState === 'visible') {
+        void silentSync();
+      }
+    };
+
+    window.addEventListener('focus', handleResumeSync);
+    document.addEventListener('visibilitychange', handleResumeSync);
 
     const connectSse = async () => {
       try {
@@ -237,14 +258,21 @@ export default function App() {
             }
           }
         }
+        if (!controller.signal.aborted) {
+          startPolling();
+        }
       } catch {
-        // Ignore abort on unmount or logout
+        if (!controller.signal.aborted) {
+          startPolling();
+        }
       }
     };
 
     connectSse();
     return () => {
       controller.abort();
+      window.removeEventListener('focus', handleResumeSync);
+      document.removeEventListener('visibilitychange', handleResumeSync);
       if (pollTimer !== undefined) {
         window.clearInterval(pollTimer);
       }
@@ -314,12 +342,17 @@ export default function App() {
       const key = r.cliente.trim().toUpperCase();
       if (!key) continue;
 
+      const recordPats = getRecordEquipmentItems(r)
+        .map((item) => item.patrimonio.trim().toUpperCase())
+        .filter(Boolean);
+
       const existing = map.get(key);
       if (!existing) {
+        const uniquePats = Array.from(new Set(recordPats));
         map.set(key, {
           cliente: r.cliente,
-          patrimonios: r.patrimonio ? [r.patrimonio] : [],
-          ultimoPatrimonio: r.patrimonio || '',
+          patrimonios: uniquePats,
+          ultimoPatrimonio: uniquePats[0] || '',
           ultimoNomeContato: r.nomeContato || '',
           ultimoTelefoneContato: r.telefoneContato || '',
           ultimoEmailContato: r.emailContato || '',
@@ -329,11 +362,13 @@ export default function App() {
         });
       } else {
         existing.totalRegistros++;
-        if (r.patrimonio && !existing.patrimonios.includes(r.patrimonio)) {
-          existing.patrimonios.push(r.patrimonio);
-        }
-        if (!existing.ultimoPatrimonio && r.patrimonio) {
-          existing.ultimoPatrimonio = r.patrimonio;
+        for (const pat of recordPats) {
+          if (!existing.patrimonios.includes(pat)) {
+            existing.patrimonios.push(pat);
+          }
+          if (!existing.ultimoPatrimonio) {
+            existing.ultimoPatrimonio = pat;
+          }
         }
         if (!existing.ultimoNomeContato && r.nomeContato) {
           existing.ultimoNomeContato = r.nomeContato;

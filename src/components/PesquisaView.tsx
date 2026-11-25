@@ -4,6 +4,8 @@ import type { CobrancaRecord } from '../types/cobranca';
 import {
   buildPatrimonioSummaries,
   compareRecordsNewestFirst,
+  getHorimetroForPatrimonio,
+  getRecordEquipmentItems,
   type PatrimonioSummary,
 } from '../utils/horimetro';
 import { StatusIndicator } from './StatusIndicator';
@@ -296,10 +298,30 @@ export function PesquisaView({ records, onOpenDrawer }: PesquisaViewProps) {
                       <div className="text-[11px] text-slate-500">{rec.empresa}</div>
                     </td>
                     <td className="px-3 py-2 font-mono font-semibold text-[#10203A] whitespace-nowrap">
-                      {rec.patrimonio || '—'}
+                      {(() => {
+                        const items = getRecordEquipmentItems(rec);
+                        if (items.length <= 1) return rec.patrimonio || '—';
+                        return (
+                          <div className="space-y-0.5">
+                            {items.map((item, idx) => (
+                              <div key={idx}>{item.patrimonio || '—'}</div>
+                            ))}
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td className="px-3 py-2 font-mono font-bold text-[#10203A] whitespace-nowrap">
-                      {rec.horimetro || '—'}
+                      {(() => {
+                        const items = getRecordEquipmentItems(rec);
+                        if (items.length <= 1) return rec.horimetro || '—';
+                        return (
+                          <div className="space-y-0.5">
+                            {items.map((item, idx) => (
+                              <div key={idx}>{item.horimetro || '—'}</div>
+                            ))}
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td className="px-3 py-2 font-mono text-slate-600 whitespace-nowrap">
                       {rec.dataColeta || '—'}
@@ -374,7 +396,7 @@ export function PesquisaView({ records, onOpenDrawer }: PesquisaViewProps) {
                       </td>
                       <td className="px-3 py-2 text-slate-800">{h.cliente}</td>
                       <td className="px-3 py-2 font-mono font-bold text-[#10203A] whitespace-nowrap">
-                        {h.horimetro || '—'}
+                        {getHorimetroForPatrimonio(h, historyTarget.patrimonio) || '—'}
                       </td>
                       <td className="px-3 py-2 text-right whitespace-nowrap">
                         <button

@@ -6,6 +6,7 @@ import {
   Paperclip,
   Phone,
   PhoneMissed,
+  Plus,
   Search,
   Sparkles,
   Upload,
@@ -16,6 +17,7 @@ import type {
   StatusHorimetro,
   UserRole,
 } from '../types/cobranca';
+import { getRecordEquipmentItems } from '../utils/horimetro';
 
 interface RecepcaoColetaViewProps {
   records: CobrancaRecord[];
@@ -81,10 +83,12 @@ export function RecepcaoColetaView({
       if (empresaFilter !== 'Todas' && r.empresa !== empresaFilter) return false;
 
       if (!q) return true;
+      const items = getRecordEquipmentItems(r);
       return (
         r.cliente.toLowerCase().includes(q) ||
         r.numeroFicha.toLowerCase().includes(q) ||
         r.patrimonio.toLowerCase().includes(q) ||
+        items.some((i) => i.patrimonio.toLowerCase().includes(q)) ||
         r.nomeContato.toLowerCase().includes(q) ||
         r.empresa.toLowerCase().includes(q)
       );
@@ -196,17 +200,31 @@ export function RecepcaoColetaView({
   const handleStatusChange = async (rec: CobrancaRecord, nextStatus: StatusHorimetro) => {
     if (nextStatus === rec.status) return;
 
+    const items = getRecordEquipmentItems(rec);
+    const hasMulti = items.length > 1;
     const pat = getFieldValue(rec, 'patrimonio').trim().toUpperCase();
     const hor = getFieldValue(rec, 'horimetro').trim();
     const dataCol = getFieldValue(rec, 'dataColeta').trim();
 
-    if (nextStatus === 'Coletado' && (!pat || !hor)) {
-      setRowError({
-        id: rec.id,
-        message: `Ficha ${rec.numeroFicha}: preencha Patrimônio e Horímetro antes de mudar para Coletado.`,
-      });
-      onOpenDrawer(rec);
-      return;
+    if (nextStatus === 'Coletado') {
+      if (hasMulti) {
+        const incomplete = items.some((i) => !i.patrimonio.trim() || !i.horimetro.trim());
+        if (incomplete) {
+          setRowError({
+            id: rec.id,
+            message: `Ficha ${rec.numeroFicha}: preencha Patrimônio e Horímetro de todos os equipamentos antes de marcar como Coletado.`,
+          });
+          onOpenDrawer(rec);
+          return;
+        }
+      } else if (!pat || !hor) {
+        setRowError({
+          id: rec.id,
+          message: `Ficha ${rec.numeroFicha}: preencha Patrimônio e Horímetro antes de mudar para Coletado.`,
+        });
+        onOpenDrawer(rec);
+        return;
+      }
     }
 
     setRowError(null);
@@ -441,31 +459,84 @@ export function RecepcaoColetaView({
                       </td>
 
                       <td className="px-1.5 py-1.5">
-                        <input
-                          type="text"
-                          value={getFieldValue(rec, 'patrimonio')}
-                          onChange={(e) => setFieldDraft(rec.id, 'patrimonio', e.target.value)}
-                          onBlur={() => commitField(rec, 'patrimonio')}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-                          }}
-                          placeholder="GG-216"
-                          className="w-full rounded border border-slate-200 bg-white px-2 py-1.5 font-mono text-xs uppercase text-slate-900 placeholder:text-slate-300 focus:border-[#10203A] focus:outline-none"
-                        />
+                        {(() => {
+                          const items = getRecordEquipmentItems(rec);
+                          if (items.length > 1) {
+                            return (
+                              <button
+                                type="button"
+                                onClick={() => onOpenDrawer(rec)}
+                                className="w-full rounded border border-[#10203A]/20 bg-slate-50 px-2 py-1 text-left font-mono text-[11px] font-semibold uppercase text-[#10203A] hover:bg-slate-100"
+                                title="Clique para editar os patrimônios desta ficha"
+                              >
+                                {items.map((item, i) => (
+                                  <div key={i} className="truncate">
+                                    {item.patrimonio || '—'}
+                                  </div>
+                                ))}
+                              </button>
+                            );
+                          }
+                          return (
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="text"
+                                value={getFieldValue(rec, 'patrimonio')}
+                                onChange={(e) => setFieldDraft(rec.id, 'patrimonio', e.target.value)}
+                                onBlur={() => commitField(rec, 'patrimonio')}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                                }}
+                                placeholder="GG-216"
+                                className="w-full rounded border border-slate-200 bg-white px-2 py-1.5 font-mono text-xs uppercase text-slate-900 placeholder:text-slate-300 focus:border-[#10203A] focus:outline-none"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => onOpenDrawer(rec)}
+                                className="rounded border border-slate-200 bg-slate-50 p-1 text-slate-600 hover:border-[#10203A] hover:bg-[#FEF7DB] hover:text-[#10203A] shrink-0"
+                                title="Adicionar mais patrimônios nesta ficha"
+                                aria-label={`Adicionar mais patrimônios na ficha ${rec.numeroFicha}`}
+                              >
+                                <Plus className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          );
+                        })()}
                       </td>
 
                       <td className="px-1.5 py-1.5">
-                        <input
-                          type="text"
-                          value={getFieldValue(rec, 'horimetro')}
-                          onChange={(e) => setFieldDraft(rec.id, 'horimetro', e.target.value)}
-                          onBlur={() => commitField(rec, 'horimetro')}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-                          }}
-                          placeholder="6330.6h"
-                          className="w-full rounded border border-slate-200 bg-white px-2 py-1.5 font-mono text-xs text-slate-900 placeholder:text-slate-300 focus:border-[#10203A] focus:outline-none"
-                        />
+                        {(() => {
+                          const items = getRecordEquipmentItems(rec);
+                          if (items.length > 1) {
+                            return (
+                              <button
+                                type="button"
+                                onClick={() => onOpenDrawer(rec)}
+                                className="w-full rounded border border-slate-200 bg-slate-50 px-2 py-1 text-left font-mono text-[11px] font-semibold text-slate-800 hover:bg-slate-100"
+                                title="Clique para editar os horímetros desta ficha"
+                              >
+                                {items.map((item, i) => (
+                                  <div key={i} className="truncate">
+                                    {item.horimetro || '—'}
+                                  </div>
+                                ))}
+                              </button>
+                            );
+                          }
+                          return (
+                            <input
+                              type="text"
+                              value={getFieldValue(rec, 'horimetro')}
+                              onChange={(e) => setFieldDraft(rec.id, 'horimetro', e.target.value)}
+                              onBlur={() => commitField(rec, 'horimetro')}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                              }}
+                              placeholder="6330.6h"
+                              className="w-full rounded border border-slate-200 bg-white px-2 py-1.5 font-mono text-xs text-slate-900 placeholder:text-slate-300 focus:border-[#10203A] focus:outline-none"
+                            />
+                          );
+                        })()}
                       </td>
 
                       <td className="px-1.5 py-1.5">

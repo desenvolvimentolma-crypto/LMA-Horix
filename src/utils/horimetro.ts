@@ -1,4 +1,4 @@
-import type { CobrancaRecord } from '../types/cobranca';
+import type { CobrancaRecord, PatrimonioItem } from '../types/cobranca';
 
 export function parseHorimetroNumber(raw: string | number | undefined | null): number | null {
   if (raw === null || raw === undefined) return null;
@@ -31,6 +31,58 @@ export function parseHorimetroNumber(raw: string | number | undefined | null): n
 
 export function formatHorimetroHours(val: number): string {
   return `${val.toFixed(2)}h`;
+}
+
+export function getRecordEquipmentItems(
+  record: Pick<CobrancaRecord, 'patrimonio' | 'horimetro' | 'patrimoniosItens'>
+): PatrimonioItem[] {
+  if (Array.isArray(record.patrimoniosItens) && record.patrimoniosItens.length > 0) {
+    const cleaned = record.patrimoniosItens
+      .map((item) => ({
+        patrimonio: String(item.patrimonio || '').trim().toUpperCase(),
+        horimetro: String(item.horimetro || '').trim(),
+      }))
+      .filter((item) => item.patrimonio !== '' || item.horimetro !== '');
+    if (cleaned.length > 0) return cleaned;
+  }
+
+  const rawPat = String(record.patrimonio || '').trim();
+  const rawHor = String(record.horimetro || '').trim();
+  if (!rawPat && !rawHor) return [];
+
+  const splitValues = (raw: string) =>
+    raw
+      .split(/\s*(?:\/|\||;|\n)\s*/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+  const pats = splitValues(rawPat);
+  const hors = splitValues(rawHor);
+
+  if (pats.length > 1) {
+    return pats.map((pat, idx) => ({
+      patrimonio: pat.toUpperCase(),
+      horimetro: hors[idx] ?? (hors.length === 1 && idx === 0 ? hors[0] : ''),
+    }));
+  }
+
+  return [
+    {
+      patrimonio: rawPat.toUpperCase(),
+      horimetro: rawHor,
+    },
+  ];
+}
+
+export function getHorimetroForPatrimonio(
+  record: Pick<CobrancaRecord, 'patrimonio' | 'horimetro' | 'patrimoniosItens'>,
+  patrimonio: string
+): string {
+  const target = patrimonio.trim().toUpperCase();
+  const items = getRecordEquipmentItems(record);
+  const matched = items.find((item) => item.patrimonio.toUpperCase() === target);
+  if (matched) return matched.horimetro;
+  return record.horimetro || '';
 }
 
 export function parseBrDateToTimestamp(dateStr: string | undefined, fallbackIso?: string): number {
@@ -83,30 +135,38 @@ export function buildPatrimonioSummaries(records: CobrancaRecord[]): PatrimonioS
   const groups = new Map<string, CobrancaRecord[]>();
 
   for (const r of records) {
-    const pat = r.patrimonio.trim().toUpperCase();
-    if (!pat) continue;
-    const list = groups.get(pat) || [];
-    list.push(r);
-    groups.set(pat, list);
+    const items = getRecordEquipmentItems(r);
+    const seenInRecord = new Set<string>();
+    for (const item of items) {
+      const pat = item.patrimonio.trim().toUpperCase();
+      if (!pat || seenInRecord.has(pat)) continue;
+      seenInRecord.add(pat);
+      const list = groups.get(pat) || [];
+      list.push(r);
+      groups.set(pat, list);
+    }
   }
 
   const summaries: PatrimonioSummary[] = [];
   for (const [patrimonio, list] of groups.entries()) {
     const sorted = [...list].sort(compareRecordsNewestFirst);
     const billedWithReading = sorted.filter(
-      (r) => r.status === 'Faturado' && r.horimetro.trim() !== ''
+      (r) => r.status === 'Faturado' && getHorimetroForPatrimonio(r, patrimonio).trim() !== ''
     );
-    const anyWithReading = sorted.filter((r) => r.horimetro.trim() !== '');
+    const anyWithReading = sorted.filter(
+      (r) => getHorimetroForPatrimonio(r, patrimonio).trim() !== ''
+    );
     const latestBilled = billedWithReading[0] || null;
     const latestAny = anyWithReading[0] || sorted[0];
     const effective = latestBilled || latestAny;
+    const effectiveHorimetro = effective ? getHorimetroForPatrimonio(effective, patrimonio) : '';
 
     summaries.push({
       patrimonio,
       ultimoRegistroFaturado: latestBilled,
       ultimoRegistroQualquer: latestAny,
-      ultimoHorimetroTexto: effective?.horimetro || '—',
-      ultimoHorimetroNumero: parseHorimetroNumber(effective?.horimetro),
+      ultimoHorimetroTexto: effectiveHorimetro || '—',
+      ultimoHorimetroNumero: parseHorimetroNumber(effectiveHorimetro),
       historico: sorted,
     });
   }
@@ -130,31 +190,41 @@ export function buildClientPlatforms(records: CobrancaRecord[]): ClientPlatformI
 
   for (const r of records) {
     const cliente = r.cliente.trim().toUpperCase();
-    const pat = r.patrimonio.trim().toUpperCase();
-    if (!cliente || !pat) continue;
-    const key = `${cliente}__${pat}`;
-    const list = groups.get(key) || [];
-    list.push(r);
-    groups.set(key, list);
+    if (!cliente) continue;
+    const items = getRecordEquipmentItems(r);
+    const seenInRecord = new Set<string>();
+    for (const item of items) {
+      const pat = item.patrimonio.trim().toUpperCase();
+      if (!pat || seenInRecord.has(pat)) continue;
+      seenInRecord.add(pat);
+      const key = `${cliente}__${pat}`;
+      const list = groups.get(key) || [];
+      list.push(r);
+      groups.set(key, list);
+    }
   }
 
   const items: ClientPlatformItem[] = [];
-  for (const list of groups.values()) {
+  for (const [key, list] of groups.entries()) {
+    const patrimonio = key.split('__')[1] || '';
     const sorted = [...list].sort(compareRecordsNewestFirst);
     const billedWithReading = sorted.filter(
-      (r) => r.status === 'Faturado' && r.horimetro.trim() !== ''
+      (r) => r.status === 'Faturado' && getHorimetroForPatrimonio(r, patrimonio).trim() !== ''
     );
     const latestBilled = billedWithReading[0] || null;
     const latest = sorted[0];
+    const billedHorimetro = latestBilled
+      ? getHorimetroForPatrimonio(latestBilled, patrimonio)
+      : '';
 
     items.push({
       cliente: latest.cliente,
-      patrimonio: latest.patrimonio.trim().toUpperCase(),
+      patrimonio,
       empresa: latest.empresa,
       ultimoFaturado: latestBilled,
       ultimoRegistro: latest,
-      horimetroFaturadoNumero: parseHorimetroNumber(latestBilled?.horimetro),
-      horimetroFaturadoTexto: latestBilled?.horimetro || '',
+      horimetroFaturadoNumero: parseHorimetroNumber(billedHorimetro),
+      horimetroFaturadoTexto: billedHorimetro,
       totalCiclos: sorted.length,
     });
   }
@@ -165,3 +235,4 @@ export function buildClientPlatforms(records: CobrancaRecord[]): ClientPlatformI
     return a.patrimonio.localeCompare(b.patrimonio, 'pt-BR');
   });
 }
+

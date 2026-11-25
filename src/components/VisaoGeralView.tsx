@@ -8,6 +8,7 @@ import {
   Upload,
 } from 'lucide-react';
 import type { CobrancaRecord, StatusHorimetro, UserRole, WorkspaceTab } from '../types/cobranca';
+import { getRecordEquipmentItems } from '../utils/horimetro';
 import { deriveMesAnoRef } from '../utils/spreadsheet';
 import { StatusIndicator } from './StatusIndicator';
 
@@ -361,10 +362,30 @@ export function VisaoGeralView({
                       <div className="text-[11px] text-slate-500">{rec.empresa}</div>
                     </td>
                     <td className="px-2.5 py-2 font-mono text-slate-800 whitespace-nowrap">
-                      {rec.patrimonio || '—'}
+                      {(() => {
+                        const items = getRecordEquipmentItems(rec);
+                        if (items.length <= 1) return rec.patrimonio || '—';
+                        return (
+                          <div className="space-y-0.5">
+                            {items.map((item, idx) => (
+                              <div key={idx}>{item.patrimonio || '—'}</div>
+                            ))}
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td className="px-2.5 py-2 font-mono font-semibold text-[#10203A] whitespace-nowrap">
-                      {rec.horimetro || '—'}
+                      {(() => {
+                        const items = getRecordEquipmentItems(rec);
+                        if (items.length <= 1) return rec.horimetro || '—';
+                        return (
+                          <div className="space-y-0.5">
+                            {items.map((item, idx) => (
+                              <div key={idx}>{item.horimetro || '—'}</div>
+                            ))}
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td className="px-2.5 py-2 text-slate-600 whitespace-nowrap">
                       {rec.nomeContato ? (

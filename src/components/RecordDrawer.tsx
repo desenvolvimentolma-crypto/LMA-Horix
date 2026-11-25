@@ -9,6 +9,8 @@ import {
   Paperclip,
   Phone,
   PhoneMissed,
+  Plus,
+  Save,
   Sparkles,
   Trash2,
   X,
@@ -17,9 +19,11 @@ import type {
   ClientCatalogEntry,
   CobrancaRecord,
   FichaAttachment,
+  PatrimonioItem,
   StatusHorimetro,
   UserRole,
 } from '../types/cobranca';
+import { getRecordEquipmentItems } from '../utils/horimetro';
 import { StatusIndicator } from './StatusIndicator';
 
 interface RecordDrawerProps {
@@ -54,8 +58,11 @@ export function RecordDrawer({
   onFetchAttachmentBlob,
 }: RecordDrawerProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [patrimonio, setPatrimonio] = useState('');
-  const [horimetro, setHorimetro] = useState('');
+  const loadedRecordIdRef = useRef<string | null>(null);
+
+  const [patrimoniosItens, setPatrimoniosItens] = useState<PatrimonioItem[]>([
+    { patrimonio: '', horimetro: '' },
+  ]);
   const [dataColeta, setDataColeta] = useState('');
   const [nomeContato, setNomeContato] = useState('');
   const [telefoneContato, setTelefoneContato] = useState('');
@@ -72,10 +79,21 @@ export function RecordDrawer({
     name: string;
   } | null>(null);
 
+  // Only reset form state when opening a different ficha so fast background sync does not overwrite edits
   useEffect(() => {
-    if (!record) return;
-    setPatrimonio(record.patrimonio || '');
-    setHorimetro(record.horimetro || '');
+    if (!record) {
+      loadedRecordIdRef.current = null;
+      return;
+    }
+    if (loadedRecordIdRef.current === record.id) {
+      return;
+    }
+    loadedRecordIdRef.current = record.id;
+
+    const initialItems = getRecordEquipmentItems(record);
+    setPatrimoniosItens(
+      initialItems.length > 0 ? initialItems : [{ patrimonio: '', horimetro: '' }]
+    );
     setDataColeta(record.dataColeta || '');
     setNomeContato(record.nomeContato || '');
     setTelefoneContato(record.telefoneContato || '');
@@ -135,6 +153,8 @@ export function RecordDrawer({
   const canSetFaturado = userRole === 'Desenvolvedor' || userRole === 'Recebimento';
   const anexos = record.anexos || [];
 
+  const firstPatrimonioEmpty = !patrimoniosItens.some((i) => i.patrimonio.trim() !== '');
+
   const hasSuggestion =
     Boolean(clientSuggestion) &&
     (clientSuggestion!.ultimoPatrimonio !== '' ||
@@ -143,8 +163,15 @@ export function RecordDrawer({
 
   const applySuggestion = () => {
     if (!clientSuggestion) return;
-    if (!patrimonio && clientSuggestion.ultimoPatrimonio) {
-      setPatrimonio(clientSuggestion.ultimoPatrimonio);
+    if (firstPatrimonioEmpty && clientSuggestion.ultimoPatrimonio) {
+      setPatrimoniosItens((prev) => {
+        const next = [...prev];
+        next[0] = {
+          patrimonio: clientSuggestion.ultimoPatrimonio,
+          horimetro: next[0]?.horimetro || '',
+        };
+        return next;
+      });
     }
     if (!nomeContato && clientSuggestion.ultimoNomeContato) {
       setNomeContato(clientSuggestion.ultimoNomeContato);
@@ -155,6 +182,40 @@ export function RecordDrawer({
     if (!emailContato && clientSuggestion.ultimoEmailContato) {
       setEmailContato(clientSuggestion.ultimoEmailContato);
     }
+  };
+
+  const updatePatrimonioItem = (
+    index: number,
+    field: keyof PatrimonioItem,
+    value: string
+  ) => {
+    setPatrimoniosItens((prev) =>
+      prev.map((item, idx) => (idx === index ? { ...item, [field]: value } : item))
+    );
+  };
+
+  const addPatrimonioItem = (prefillPatrimonio = '') => {
+    setPatrimoniosItens((prev) => {
+      if (
+        prev.length === 1 &&
+        !prev[0].patrimonio.trim() &&
+        !prev[0].horimetro.trim() &&
+        prefillPatrimonio
+      ) {
+        return [{ patrimonio: prefillPatrimonio.toUpperCase(), horimetro: '' }];
+      }
+      return [
+        ...prev,
+        { patrimonio: prefillPatrimonio.toUpperCase(), horimetro: '' },
+      ];
+    });
+  };
+
+  const removePatrimonioItem = (index: number) => {
+    setPatrimoniosItens((prev) => {
+      if (prev.length <= 1) return [{ patrimonio: '', horimetro: '' }];
+      return prev.filter((_, idx) => idx !== index);
+    });
   };
 
   const fillToday = () => {
@@ -236,23 +297,50 @@ export function RecordDrawer({
 
   const handleSave = async (targetStatus?: StatusHorimetro) => {
     const finalStatus = targetStatus ?? status;
+    const normalizedItems = patrimoniosItens
+      .map((item) => ({
+        patrimonio: item.patrimonio.trim().toUpperCase(),
+        horimetro: item.horimetro.trim(),
+      }))
+      .filter((item) => item.patrimonio !== '' || item.horimetro !== '');
+
     if (finalStatus === 'Coletado') {
-      if (!patrimonio.trim()) {
-        setValidationError('Informe o Patrimônio antes de marcar como Coletado.');
+      if (normalizedItems.length === 0) {
+        setValidationError(
+          'Informe ao menos um Patrimônio e Horímetro antes de marcar como Coletado.'
+        );
         return;
       }
-      if (!horimetro.trim()) {
-        setValidationError('Informe a leitura do Horímetro antes de marcar como Coletado.');
+      const missingPat = normalizedItems.find((i) => !i.patrimonio);
+      if (missingPat) {
+        setValidationError('Preencha o código do Patrimônio em todos os equipamentos.');
+        return;
+      }
+      const missingHor = normalizedItems.find((i) => !i.horimetro);
+      if (missingHor) {
+        setValidationError(
+          `Informe a leitura do Horímetro para o patrimônio ${missingHor.patrimonio}.`
+        );
         return;
       }
     }
+
+    const joinedPatrimonio = normalizedItems
+      .map((i) => i.patrimonio)
+      .filter(Boolean)
+      .join(' / ');
+    const joinedHorimetro = normalizedItems
+      .map((i) => i.horimetro)
+      .filter(Boolean)
+      .join(' / ');
 
     setValidationError('');
     setSaving(true);
     try {
       await onSave(record.id, {
-        patrimonio: patrimonio.trim().toUpperCase(),
-        horimetro: horimetro.trim(),
+        patrimonio: joinedPatrimonio,
+        horimetro: joinedHorimetro,
+        patrimoniosItens: normalizedItems,
         dataColeta: dataColeta.trim(),
         nomeContato: nomeContato.trim().toUpperCase(),
         telefoneContato: telefoneContato.trim(),
@@ -278,6 +366,13 @@ export function RecordDrawer({
     }
   };
 
+  const currentPatSet = new Set(
+    patrimoniosItens.map((i) => i.patrimonio.trim().toUpperCase()).filter(Boolean)
+  );
+  const availableExtraPatrimonios = (clientSuggestion?.patrimonios || []).filter(
+    (p) => p && !currentPatSet.has(p.trim().toUpperCase())
+  );
+
   return (
     <div
       className="fixed inset-0 z-50 flex justify-end bg-slate-900/35 backdrop-blur-[1px]"
@@ -287,6 +382,7 @@ export function RecordDrawer({
       onPaste={handlePaste}
     >
       <div className="flex h-full w-full max-w-xl flex-col border-l border-slate-200 bg-white shadow-xl">
+        {/* Drawer Header */}
         <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-4">
           <div className="min-w-0">
             <div className="flex items-center gap-2.5 text-xs text-slate-500">
@@ -318,6 +414,47 @@ export function RecordDrawer({
           </button>
         </div>
 
+        {/* Top Action Bar (positioned away from bottom-right Netlify watermark) */}
+        {!isReadOnly && (
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-slate-50 px-6 py-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => handleSave()}
+                disabled={saving}
+                className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-100 disabled:opacity-50 whitespace-nowrap shadow-2xs"
+              >
+                <Save className="h-3.5 w-3.5 text-[#10203A]" aria-hidden="true" />
+                {saving ? 'Salvando...' : 'Salvar Alterações'}
+              </button>
+
+              {status !== 'Coletado' && status !== 'Faturado' && (
+                <button
+                  type="button"
+                  onClick={() => handleSave('Coletado')}
+                  disabled={saving}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-[#10203A] px-3.5 py-2 text-xs font-semibold text-white hover:bg-[#193056] disabled:opacity-50 whitespace-nowrap"
+                >
+                  <CheckCircle2 className="h-4 w-4 text-[#F4C430]" aria-hidden="true" />
+                  Marcar Coletado
+                </button>
+              )}
+
+              {status !== 'Sem Retorno' && status !== 'Faturado' && (
+                <button
+                  type="button"
+                  onClick={() => handleSave('Sem Retorno')}
+                  disabled={saving}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-800 hover:bg-rose-100 disabled:opacity-50 whitespace-nowrap"
+                >
+                  <PhoneMissed className="h-3.5 w-3.5" aria-hidden="true" />
+                  Sem Retorno
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
           {isLockedForRecepcao && (
             <div className="rounded-md border border-slate-200 bg-slate-100 px-3.5 py-2.5 text-xs text-slate-700">
@@ -331,7 +468,7 @@ export function RecordDrawer({
             </div>
           )}
 
-          {hasSuggestion && (!patrimonio || !telefoneContato) && !isReadOnly && (
+          {hasSuggestion && (firstPatrimonioEmpty || !telefoneContato) && !isReadOnly && (
             <div className="flex items-center justify-between gap-3 rounded-lg border border-blue-200 bg-blue-50/70 px-4 py-3">
               <div className="min-w-0 text-xs text-blue-950">
                 <p className="font-medium">Histórico encontrado para este cliente</p>
@@ -365,35 +502,104 @@ export function RecordDrawer({
             </div>
           )}
 
+          {/* Patrimonios & Horimetros section (supports 1 or multiple equipments inside the same ficha) */}
+          <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-700">
+                  Patrimônios e Horímetros ({patrimoniosItens.length})
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  Se esta ficha tiver mais de um equipamento, adicione cada patrimônio e seu horímetro abaixo.
+                </p>
+              </div>
+
+              {!isReadOnly && (
+                <button
+                  type="button"
+                  onClick={() => addPatrimonioItem()}
+                  className="inline-flex items-center gap-1 rounded-md border border-[#10203A]/25 bg-white px-2.5 py-1.5 text-xs font-semibold text-[#10203A] hover:bg-[#FEF7DB] transition-colors whitespace-nowrap"
+                >
+                  <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                  Adicionar Patrimônio
+                </button>
+              )}
+            </div>
+
+            <div className="space-y-2.5">
+              {patrimoniosItens.map((item, idx) => (
+                <div
+                  key={idx}
+                  className="grid grid-cols-1 gap-2.5 rounded-md border border-slate-200 bg-white p-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end"
+                >
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                      Patrimônio {patrimoniosItens.length > 1 ? `#${idx + 1}` : '*'}
+                    </label>
+                    <input
+                      type="text"
+                      disabled={isReadOnly}
+                      value={item.patrimonio}
+                      onChange={(e) =>
+                        updatePatrimonioItem(idx, 'patrimonio', e.target.value)
+                      }
+                      placeholder="Ex: GG-216"
+                      className="w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-mono uppercase text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15 disabled:bg-slate-100"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                      Horímetro {patrimoniosItens.length > 1 ? `#${idx + 1}` : 'Coletado *'}
+                    </label>
+                    <input
+                      type="text"
+                      disabled={isReadOnly}
+                      value={item.horimetro}
+                      onChange={(e) =>
+                        updatePatrimonioItem(idx, 'horimetro', e.target.value)
+                      }
+                      placeholder="Ex: 6330.6h"
+                      className="w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-mono text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15 disabled:bg-slate-100"
+                    />
+                  </div>
+
+                  {!isReadOnly && patrimoniosItens.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => removePatrimonioItem(idx)}
+                      className="inline-flex h-9 items-center justify-center rounded-md border border-red-200 bg-white px-2.5 text-xs text-red-700 hover:bg-red-50"
+                      title="Remover este patrimônio da ficha"
+                      aria-label={`Remover patrimônio ${idx + 1}`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {!isReadOnly && availableExtraPatrimonios.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                <span className="text-[11px] font-medium text-slate-500">
+                  Do histórico deste cliente:
+                </span>
+                {availableExtraPatrimonios.slice(0, 6).map((pat) => (
+                  <button
+                    key={pat}
+                    type="button"
+                    onClick={() => addPatrimonioItem(pat)}
+                    className="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2 py-0.5 font-mono text-[11px] font-medium text-slate-700 hover:border-[#10203A] hover:bg-slate-50"
+                  >
+                    <Plus className="h-2.5 w-2.5" aria-hidden="true" />
+                    {pat}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1.5">
-                Patrimônio *
-              </label>
-              <input
-                type="text"
-                disabled={isReadOnly}
-                value={patrimonio}
-                onChange={(e) => setPatrimonio(e.target.value)}
-                placeholder="Ex: GG-216"
-                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-mono uppercase text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15 disabled:bg-slate-100"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1.5">
-                Horímetro Coletado *
-              </label>
-              <input
-                type="text"
-                disabled={isReadOnly}
-                value={horimetro}
-                onChange={(e) => setHorimetro(e.target.value)}
-                placeholder="Ex: 6330.6h"
-                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-mono text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15 disabled:bg-slate-100"
-              />
-            </div>
-
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1.5">
                 Data da Coleta
@@ -570,7 +776,7 @@ export function RecordDrawer({
             )}
           </div>
 
-          <div className="border-t border-slate-200 pt-4">
+          <div className="border-t border-slate-200 pt-4 pb-2">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">
               Dados do Contato no Cliente
             </h3>
@@ -645,58 +851,34 @@ export function RecordDrawer({
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-2.5 border-t border-slate-200 bg-slate-50 px-6 py-4">
-          {canDelete ? (
-            <button
-              type="button"
-              onClick={handleDelete}
-              disabled={saving}
-              className="inline-flex items-center gap-1.5 rounded-md border border-red-200 bg-white px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50 whitespace-nowrap"
-            >
-              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-              Excluir
-            </button>
-          ) : (
-            <div />
-          )}
-
-          {!isReadOnly && (
-            <div className="flex flex-wrap items-center gap-2">
-              {status !== 'Sem Retorno' && status !== 'Faturado' && (
-                <button
-                  type="button"
-                  onClick={() => handleSave('Sem Retorno')}
-                  disabled={saving}
-                  className="inline-flex items-center gap-1.5 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-800 hover:bg-rose-100 disabled:opacity-50 whitespace-nowrap"
-                >
-                  <PhoneMissed className="h-3.5 w-3.5" aria-hidden="true" />
-                  Sem Retorno
-                </button>
-              )}
-
+        {/* Bottom Bar left-aligned so bottom-right Netlify watermark never blocks buttons */}
+        {(canDelete || !isReadOnly) && (
+          <div className="flex flex-wrap items-center justify-start gap-2.5 border-t border-slate-200 bg-slate-50 px-6 py-4 pr-28">
+            {!isReadOnly && (
               <button
                 type="button"
                 onClick={() => handleSave()}
                 disabled={saving}
-                className="rounded-md border border-slate-300 bg-white px-3.5 py-2 text-xs font-medium text-slate-800 hover:bg-slate-100 disabled:opacity-50 whitespace-nowrap"
+                className="inline-flex items-center gap-1.5 rounded-md bg-[#10203A] px-3.5 py-2 text-xs font-semibold text-white hover:bg-[#193056] disabled:opacity-50 whitespace-nowrap"
               >
-                Salvar
+                <Save className="h-3.5 w-3.5 text-[#F4C430]" aria-hidden="true" />
+                {saving ? 'Salvando...' : 'Salvar'}
               </button>
+            )}
 
-              {status !== 'Coletado' && status !== 'Faturado' && (
-                <button
-                  type="button"
-                  onClick={() => handleSave('Coletado')}
-                  disabled={saving}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-[#10203A] px-3.5 py-2 text-xs font-medium text-white hover:bg-[#193056] disabled:opacity-50 whitespace-nowrap"
-                >
-                  <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
-                  Marcar Coletado
-                </button>
-              )}
-            </div>
-          )}
-        </div>
+            {canDelete && (
+              <button
+                type="button"
+                onClick={handleDelete}
+                disabled={saving}
+                className="inline-flex items-center gap-1.5 rounded-md border border-red-200 bg-white px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50 whitespace-nowrap"
+              >
+                <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                Excluir Ficha
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Image Lightbox Modal */}
